@@ -1,0 +1,25 @@
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# Java / build
+target/
+build/
+out/
+*.class
+.gradle/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Env / secrets
+.env
+*.log
