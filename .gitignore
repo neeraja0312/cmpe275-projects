@@ -29,3 +29,8 @@ Dataset/
 *.csv
 *.zip
 *.tar.gz
+
+# CMake build trees and benchmark output
+cmake-build-*/
+build-*/
+results/
