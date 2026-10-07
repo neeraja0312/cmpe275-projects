@@ -23,3 +23,9 @@ node_modules/
 # Env / secrets
 .env
 *.log
+
+# Datasets (EPA AQS hourly CSVs, ~14 GB) - never commit
+Dataset/
+*.csv
+*.zip
+*.tar.gz
