@@ -34,3 +34,6 @@ Dataset/
 cmake-build-*/
 build-*/
 results/
+
+# Instructor course material (kept local only)
+Minis/parser/
