@@ -41,6 +41,9 @@ if(LIB_SOURCES)
     PUBLIC  ${CMAKE_SOURCE_DIR}/lib/include
     PRIVATE ${CMAKE_SOURCE_DIR}/lib/src)
   target_link_libraries(aqdata PUBLIC OpenMP::OpenMP_CXX)
+  # Only names marked AQ_API (lib/include/aqdata/Export.hpp) are visible outside
+  # the library, so the internals stay private in the shared build too.
+  set_target_properties(aqdata PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 
   if(APP_SOURCES)
     add_executable(mini1_b ${APP_SOURCES})

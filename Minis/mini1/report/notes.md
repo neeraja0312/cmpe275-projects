@@ -207,6 +207,60 @@ selectivities) and `queries_q3.png` (three groupings). Phase 2 query CSVs in the
 same format can be plotted with a different output prefix, e.g.
 `.venv/bin/python scripts/plot_queries.py results/b-queries-full.csv b`.
 
+## 2026-10-09: Phase 2 Step 2, library + column layout (part-b/lib, part-b/app)
+
+What was built (all under `part-b/`; `part-a/` unchanged):
+- `lib/include/aqdata/` is the only thing the app can include: value types, `Database` (pimpl facade), load options, `ColumnSlice`, metrics. `lib/src/` holds the private store, loader, tokenizer and registries. The library is built with `-fvisibility=hidden`; `nm -gU libaqdata.dylib` shows exactly 46 exported functions (the public API) and none of `AosStore`, `ColumnStore`, `DataLoader`, `CsvTokenizer`, `MonitorRegistry`.
+- Two layouts selectable at run time (`mini1_b --layout aos|columns`): `AosStore` (the Phase 1 code, ported) and `ColumnStore` (one array per field: hour u32, monitor u16, value i16, qualifier u8, method u8 = 10 bytes/row, against 12). Both keep the same per-monitor block and per-file segment indexes, so the comparison isolates layout.
+- Q1 `view` returns a `ColumnSlice` (strided column readers), zero-copy for both layouts.
+- Tests: `test_queries` (2,980 checks, every loader and both layouts), `test_layouts_agree` (1,147 checks: 2024 data loaded into both layouts, every Q1/Q2/Q3 result mode identical, row for row), `test_full_dataset` (both layouts reproduce the 65,742,181-row totals). ASan + UBSan clean on all three.
+- Build: `cmake -S part-b -B part-b/build -DCMAKE_CXX_COMPILER="$(brew --prefix llvm)/bin/clang++" -DOpenMP_ROOT="$(brew --prefix libomp)"` (the `OpenMP_ROOT` is needed with Homebrew libomp); add `-DBUILD_SHARED_LIBS=ON` for the shared library.
+
+**Failed/neutral attempts**
+- Q1 `copy` on columns: first version used `push_back` per row (14.6 µs for 8,676 rows); adding `reserve` did not help (12.6 µs). The cost is reassembling each row from five arrays (~1.4 ns/row vs ~0.15 ns/row for a bulk copy of rows).
+- An earlier shell comparison printed nothing because zsh does not word-split `$bin`; not a code problem.
+
+### Benchmarks (M-A, full dataset, Release, buffered loader, reserve on)
+
+Method as in the Phase 1 baseline: 1 untimed warm-up + 10 timed loads; searches in one process with `--repeat 10`, min reported. Driver: `results/run_stage.sh` (git-ignored). **Caveat: the run started with the Mac on battery power (32%) and was plugged in partway through (observed on AC 20 minutes later); `b-static-aos` and probably part of `b-static-columns` ran on battery.** Compare ratios inside a configuration more than absolute times across configurations, and re-run anything that matters.
+
+Loads:
+
+| Configuration | mean s | sd | min | max | footprint |
+|---|---|---|---|---|---|
+| Phase 1 (`part-a`) | 22.95 | 0.79 | 22.58 | 25.16 | 801 MB |
+| part-b static, aos | 23.88 | 0.80 | 22.80 | 25.56 | 801 MB |
+| part-b shared, aos | 23.87 | 0.24 | 23.62 | 24.37 | 801 MB |
+| part-b static, columns | 24.57 | 0.61 | 23.92 | 25.66 | 669 MB |
+| part-b shared, columns | 23.64 | 0.06 | 23.55 | 23.73 | 669 MB |
+
+- The part-b `aos` loads are ~4% slower than Phase 1 with identical loader code; cause unknown (power state, thermal, or the extra layer). To settle it, run Phase 1 and part-b back to back on AC power.
+- Columns use 16% less memory (669 vs 801 MB) and load about as fast (24.57 s static on battery, 23.64 s shared).
+
+Searches (min of 10 repeats), ratio = columns / aos in part-b (below 1.00 = columns faster):
+
+| Query | mode | Phase 1 | aos | columns | ratio |
+|---|---|---|---|---|---|
+| Q2 ozone > 0.070 | count | 11.4 ms | 11.3 ms | 8.32 ms | 0.74 |
+| Q2 NO₂ > 100 ppb | count | 4.49 ms | 4.51 ms | 3.34 ms | 0.74 |
+| Q2 ozone, one hour (time-only) | count | 3.80 ms | 3.75 ms | 3.75 ms | 1.00 |
+| Q1 3 h / 1 yr | scan | 15.2 / 15.3 ms | 15.4 / 15.4 ms | 5.98 / 5.99 ms | 0.39 |
+| Q2 ozone > 0.030 (54%) | copy | 57.8 ms | 58.3 ms | 72.8 ms | 1.25 |
+| Q2 ozone > 0.030 (54%) | callback | 62.6 ms | 62.9 ms | 126 ms | 2.00 |
+| Q2 ozone > 0.070 | virtual | 33.9 ms | 34.0 ms | 63.3 ms | 1.86 |
+| Q2 ozone, one hour | virtual | 34.3 ms | 34.7 ms | 69.5 ms | 2.00 |
+| Q1 1 yr (8,676 rows) | copy | 1.33 µs | 1.33 µs | 12.5 µs | 9.41 |
+| Q1 3 h / 1 yr | view | 41 ns | 41 ns | 41 ns | 1.00 |
+| Q3 none / hour / monitor | | 4.18 / 5.04 / 25.1 ms | 3.80 / 5.06 / 25.7 ms | 3.78 / 5.29 / 26.6 ms | 0.99 / 1.04 / 1.03 |
+
+Static vs shared library (ratio shared/static over all ms-scale queries): aos median 1.001 (0.984 to 1.025), columns median 0.993 (0.882 to 1.060). No measurable difference: the library is entered once per query, so symbol resolution is not on the hot path.
+
+Findings so far:
+1. The library boundary costs nothing measurable: part-b `aos` equals Phase 1 on every search (within about 1 to 2%).
+2. Column layout helps only queries that touch few fields (`count` 1.35×, Q1 `scan` 2.5×) and hurts everything that must return whole rows (`copy` up to 1.25×, `callback`/`virtual` up to 2×, Q1 `copy` 9×), because rows are rebuilt from five arrays. "Do queries shape your design?" Yes: the right layout depends on what the query returns.
+3. The column `count` gain is smaller than the byte ratio suggests (2 vs 12 bytes per row): 94 MB in 8.3 ms is ~11 GB/s, far below the memory bandwidth the `aos` scan reaches (564 MB in 11.3 ms ≈ 50 GB/s). The column loop is compute-bound, probably not vectorized. To investigate and, if possible, fix (this version is kept as the "before").
+4. The time-only search does not benefit from either layout (3.75 ms in both); it needs the per-monitor binary search (W's task).
+
 ## Open items
 
 - Phase 2 (OpenMP in `part-b/omp`; library, column layout and static-vs-shared in `part-b/lib` and `part-b/app`): not started. Add entries here as results arrive, including failures.
