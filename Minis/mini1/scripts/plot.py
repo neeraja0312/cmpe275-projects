@@ -24,7 +24,10 @@ def load(label):
     with open(RESULTS / f"{label}.csv", newline="") as f:
         rows = list(csv.DictReader(f))
     wall = [float(r["wall_s"]) for r in rows]
-    rss_mb = [float(r["max_rss_bytes"]) / (1024 * 1024) for r in rows]
+    # Prefer the program-reported footprint (correct on macOS); older CSVs
+    # without that column fall back to /usr/bin/time max RSS.
+    col = "footprint_bytes" if rows and rows[0].get("footprint_bytes") else "max_rss_bytes"
+    rss_mb = [float(r[col]) / (1024 * 1024) for r in rows]
     return wall, rss_mb
 
 

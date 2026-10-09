@@ -7,7 +7,7 @@
 # Example:
 #   scripts/run_bench.sh a-serial-load 10 -- part-a/build/mini1_a ../Dataset
 #
-# Output: results/<label>.csv  with columns  run,wall_s,user_s,sys_s,max_rss_bytes
+# Output: results/<label>.csv  with columns  run,wall_s,user_s,sys_s,max_rss_bytes,footprint_bytes
 # Note: the first run reads the CSVs from disk; later runs may hit the OS page
 # cache. Use --warmup to do one untimed run first so all timed runs are "warm".
 
@@ -48,7 +48,10 @@ if (( warmup )); then
   "$@" > /dev/null
 fi
 
-echo "run,wall_s,user_s,sys_s,max_rss_bytes" > "$out"
+# footprint_bytes: peak physical footprint printed by the program itself
+# (peak_footprint_bytes= or peak_footprint_bytes_end=). On macOS, max_rss_bytes
+# from /usr/bin/time leaves out compressed memory, so use footprint for graphs.
+echo "run,wall_s,user_s,sys_s,max_rss_bytes,footprint_bytes" > "$out"
 
 for (( i = 1; i <= runs; i++ )); do
   tfile="$(mktemp)"
@@ -73,8 +76,10 @@ for (( i = 1; i <= runs; i++ )); do
   cp "$tfile" "$log_dir/run_$i.err"
   rm -f "$tfile"
 
-  echo "$i,$wall,$user,$sys,$rss" >> "$out"
-  printf "run %2d/%d  wall=%ss  rss=%s bytes\n" "$i" "$runs" "$wall" "$rss"
+  footprint=$(awk -F= '/^peak_footprint_bytes(_end)?=/ {v=$2} END {print v}' "$log_dir/run_$i.out")
+
+  echo "$i,$wall,$user,$sys,$rss,$footprint" >> "$out"
+  printf "run %2d/%d  wall=%ss  rss=%s bytes  footprint=%s bytes\n" "$i" "$runs" "$wall" "$rss" "${footprint:-n/a}"
 done
 
 echo "wrote $out"

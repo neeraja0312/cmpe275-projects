@@ -234,6 +234,8 @@ void printLoad(const AirQualityDB& db, const LoadReport& report, const LoadOptio
               << "store_bytes_per_row=" << perRow(static_cast<double>(db.storeBytes())) << '\n'
               << "peak_rss_bytes=" << rss << '\n'
               << "rss_bytes_per_row=" << perRow(static_cast<double>(rss)) << '\n'
+              << "peak_footprint_bytes=" << peakFootprintBytes() << '\n'
+              << "footprint_bytes_per_row=" << perRow(static_cast<double>(peakFootprintBytes())) << '\n'
               << "uncertainty_nonempty=" << report.uncertaintyNonEmpty << '\n'
               << "utc_offset_changes=" << report.utcOffsetChanges << '\n'
               << "order_violations=" << db.orderViolations() << '\n';
@@ -486,7 +488,8 @@ int run(int argc, char** argv) {
     } else {
         fail("unknown command " + cli.command + " (see --help)");
     }
-    std::cout << "peak_rss_bytes_end=" << peakRssBytes() << '\n';
+    std::cout << "peak_rss_bytes_end=" << peakRssBytes() << '\n'
+              << "peak_footprint_bytes_end=" << peakFootprintBytes() << '\n';
     return 0;
 }
 
