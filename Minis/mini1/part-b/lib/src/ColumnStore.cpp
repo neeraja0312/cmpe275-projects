@@ -140,6 +140,30 @@ void ColumnStore::scanValues(const ValueQuery& query, OnMatch&& onMatch) const {
     }
 }
 
+namespace {
+// Counts values in [lo, hi] with one unsigned compare per element:
+// lo <= v <= hi  <=>  (uint16)(v - lo) <= (uint16)(hi - lo)   (for lo <= hi).
+// The count is kept in 32 bits inside a block and added to the 64-bit total
+// after each block, so the compiler can keep the whole loop in 16/32-bit SIMD
+// lanes instead of widening every comparison to 64 bits.
+std::size_t countInRange(const ScaledValue* values, std::size_t n, ScaledValue lo, ScaledValue hi) {
+    if (lo > hi) return 0;
+    const auto base = static_cast<std::uint16_t>(lo);
+    const auto span = static_cast<std::uint16_t>(static_cast<std::uint16_t>(hi) - base);
+    constexpr std::size_t kBlock = std::size_t{1} << 16;  // a 32-bit counter cannot overflow within a block
+    std::size_t total = 0;
+    for (std::size_t start = 0; start < n; start += kBlock) {
+        const std::size_t end = std::min(n, start + kBlock);
+        std::uint32_t local = 0;
+        for (std::size_t i = start; i < end; ++i) {
+            local += static_cast<std::uint16_t>(static_cast<std::uint16_t>(values[i]) - base) <= span;
+        }
+        total += local;
+    }
+    return total;
+}
+}  // namespace
+
 std::size_t ColumnStore::countByValue(const ValueQuery& query) const {
     const ScaledValue lo = query.lo;
     const ScaledValue hi = query.hi;
@@ -149,12 +173,7 @@ std::size_t ColumnStore::countByValue(const ValueQuery& query) const {
         if (segment.pollutant != query.pollutant) continue;
         if (!query.range.overlaps(segment.minHour, segment.maxHour)) continue;
         if (query.range.covers(segment.minHour, segment.maxHour)) {
-            // Branch-free over a dense array of int16: the compiler can vectorize this loop.
-            std::size_t local = 0;
-            for (std::uint32_t i = segment.begin; i < segment.end; ++i) {
-                local += static_cast<std::size_t>((values[i] >= lo) & (values[i] <= hi));
-            }
-            count += local;
+            count += countInRange(values + segment.begin, segment.end - segment.begin, lo, hi);
         } else {
             for (std::uint32_t i = segment.begin; i < segment.end; ++i) {
                 if (values[i] >= lo && values[i] <= hi && query.range.contains(hours_[i])) ++count;

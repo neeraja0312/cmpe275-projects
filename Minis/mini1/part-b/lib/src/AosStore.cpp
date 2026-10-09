@@ -134,8 +134,36 @@ void AosStore::scanValues(const ValueQuery& query, OnMatch&& onMatch) const {
 }
 
 std::size_t AosStore::countByValue(const ValueQuery& query) const {
+    // Same single-unsigned-compare, 32-bit-counter loop as ColumnStore, so a
+    // comparison between the layouts measures memory layout and not loop style.
+    // Segments that only partly overlap the time range use the general scan.
+    if (query.lo > query.hi) return 0;
+    const auto base = static_cast<std::uint16_t>(query.lo);
+    const auto span = static_cast<std::uint16_t>(static_cast<std::uint16_t>(query.hi) - base);
+    constexpr std::size_t kBlock = std::size_t{1} << 16;
+
     std::size_t count = 0;
-    scanValues(query, [&count](const Measurement&) { ++count; });
+    for (const Segment& segment : segments_) {
+        if (segment.pollutant != query.pollutant) continue;
+        if (!query.range.overlaps(segment.minHour, segment.maxHour)) continue;
+
+        const Measurement* it = rows_.data() + segment.begin;
+        const Measurement* end = rows_.data() + segment.end;
+        if (query.range.covers(segment.minHour, segment.maxHour)) {
+            while (it != end) {
+                const Measurement* blockEnd = static_cast<std::size_t>(end - it) > kBlock ? it + kBlock : end;
+                std::uint32_t local = 0;
+                for (; it != blockEnd; ++it) {
+                    local += static_cast<std::uint16_t>(static_cast<std::uint16_t>(it->value) - base) <= span;
+                }
+                count += local;
+            }
+        } else {
+            for (; it != end; ++it) {
+                if (it->value >= query.lo && it->value <= query.hi && query.range.contains(it->hour)) ++count;
+            }
+        }
+    }
     return count;
 }
 

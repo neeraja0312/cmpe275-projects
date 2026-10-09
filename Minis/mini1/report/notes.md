@@ -234,7 +234,7 @@ Loads:
 | part-b static, columns | 24.57 | 0.61 | 23.92 | 25.66 | 669 MB |
 | part-b shared, columns | 23.64 | 0.06 | 23.55 | 23.73 | 669 MB |
 
-- The part-b `aos` loads are ~4% slower than Phase 1 with identical loader code; cause unknown (power state, thermal, or the extra layer). To settle it, run Phase 1 and part-b back to back on AC power.
+- The part-b `aos` loads looked ~4% slower than Phase 1 with identical loader code. **Settled, it was noise/drift:** an interleaved run on AC power (`results/interleave_load.py`, 10 rounds, Phase 1 / part-b rows / part-b columns alternating) gave medians 23.59 s / 23.57 s / 23.66 s (means 23.60 / 23.90 / 23.83; the part-b rows mean includes one 26.79 s outlier). The library layer costs nothing measurable on load. Prefer these interleaved numbers over the sequential table above.
 - Columns use 16% less memory (669 vs 801 MB) and load about as fast (24.57 s static on battery, 23.64 s shared).
 
 Searches (min of 10 repeats), ratio = columns / aos in part-b (below 1.00 = columns faster):
@@ -258,10 +258,25 @@ Static vs shared library (ratio shared/static over all ms-scale queries): aos me
 Findings so far:
 1. The library boundary costs nothing measurable: part-b `aos` equals Phase 1 on every search (within about 1 to 2%).
 2. Column layout helps only queries that touch few fields (`count` 1.35×, Q1 `scan` 2.5×) and hurts everything that must return whole rows (`copy` up to 1.25×, `callback`/`virtual` up to 2×, Q1 `copy` 9×), because rows are rebuilt from five arrays. "Do queries shape your design?" Yes: the right layout depends on what the query returns.
-3. The column `count` gain is smaller than the byte ratio suggests (2 vs 12 bytes per row): 94 MB in 8.3 ms is ~11 GB/s, far below the memory bandwidth the `aos` scan reaches (564 MB in 11.3 ms ≈ 50 GB/s). The column loop is compute-bound, probably not vectorized. To investigate and, if possible, fix (this version is kept as the "before").
+3. The column `count` gain was first smaller than the byte ratio suggests (2 vs 12 bytes per row): 94 MB in 8.3 ms is ~11 GB/s, far below what the `aos` scan reaches (564 MB in 11.3 ms ≈ 50 GB/s), so the loop was compute-bound. Fixed, see the next section.
 4. The time-only search does not benefit from either layout (3.75 ms in both); it needs the per-monitor binary search (W's task).
+
+### Count-loop fix (2026-10-09, AC power)
+
+Cause: the loop added `(v >= lo) & (v <= hi)` widened to a 64-bit `size_t` counter on int16 data, which stops the compiler from using 16/32-bit SIMD lanes (inference from the speedup, not from inspecting assembly). Fix: one unsigned compare, `(uint16_t)(v - lo) <= (uint16_t)(hi - lo)` (valid for lo <= hi; returns 0 otherwise), with a 32-bit counter flushed to the 64-bit total every 65,536 rows. The same loop style was also given to `AosStore::countByValue` so the layout comparison is fair. Results are identical (281,349 rows etc.) and all tests pass.
+
+| Q2 count (min of 10) | Phase 1 | rows, old loop | rows, new loop | columns, old loop | columns, new loop |
+|---|---|---|---|---|---|
+| ozone > 0.070 (0.6%) | 11.4 ms | 11.3 | 8.49 | 8.32 | **2.73** |
+| ozone > 0.030 (54%) | 11.3 ms | 11.3 | 7.62 | 8.36 | **2.73** |
+| NO₂ > 100 ppb | 4.49 ms | 4.51 | 2.94 | 3.34 | **1.09** |
+| one hour (time-only) | 3.80 ms | 3.75 | 3.89 | 3.75 | 3.75 |
+
+Columns are now ~4.2× faster than Phase 1 and the time no longer depends on selectivity (memory-bound: 94 MB in 2.73 ms ≈ 34 GB/s). Separating the two effects: the loop alone gives rows 1.3 to 1.5×; the layout adds another 2.8 to 3.1× on top. The time-only search is unchanged because it scans all values and the time column. Not re-run after the fix: copy/callback/virtual modes (they do not use this loop). The other Q2 numbers above are from before the fix and the battery caveat still applies to them.
+
+Graphs: `scripts/plot_compare.py` writes `results/compare_load.png`, `compare_q1.png`, `compare_q2.png`, `compare_q2_count.png`, `compare_q3.png`, `compare_linkage.png`.
 
 ## Open items
 
-- Phase 2 (OpenMP in `part-b/omp`; library, column layout and static-vs-shared in `part-b/lib` and `part-b/app`): not started. Add entries here as results arrive, including failures.
+- Phase 2 Step 2 (library, column layout, static vs shared) is done and measured on M-A. Remaining: OpenMP in `part-b/omp` (W), then integrating W's single-pass tokenizer, time-only search and OpenMP into `part-b/lib`, and re-measuring. Add entries here as results arrive, including failures.
 - Individual contributions and the AI-assisted Phase 1 code decision: undecided; needed for the report.

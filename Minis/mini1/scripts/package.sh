@@ -22,6 +22,8 @@ tar -czf "$out" \
   --exclude='build-*' \
   --exclude='cmake-build-*' \
   --exclude='*.logs' \
+  --exclude='REPORT_MATERIAL.md' \
+  --exclude='*.out' \
   --exclude='.venv' \
   --exclude='.DS_Store' \
   --exclude='.gitkeep' \

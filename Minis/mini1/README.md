@@ -4,7 +4,7 @@ C++ library that loads EPA hourly air-quality data (ozone and NO₂, 2021–2026
 and searches it. The assignment is in [mini1-edges.md](mini1-edges.md).
 
 - `part-a/`: Phase 1, serial
-- `part-b/`: Phase 2, OpenMP and libraries (not started)
+- `part-b/`: Phase 2, libraries and layouts (`lib/`, `app/`, `tests/`: done); OpenMP (`omp/`: not started)
 
 ## Dataset
 
