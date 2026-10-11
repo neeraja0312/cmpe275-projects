@@ -53,6 +53,11 @@ if(LIB_SOURCES)
   endif()
 
   mini1_add_tests(${CMAKE_SOURCE_DIR}/tests aqdata)
+  # The tokenizer is intentionally private to the library; its focused test
+  # may include that private header without exposing it to the application.
+  if(TARGET test_tokenizer)
+    target_include_directories(test_tokenizer PRIVATE ${CMAKE_SOURCE_DIR}/lib/src)
+  endif()
 else()
   message(WARNING "part-b: no .cpp files in lib/src/ yet - library, app and tests not built")
 endif()

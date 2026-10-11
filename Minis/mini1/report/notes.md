@@ -276,6 +276,31 @@ Columns are now ~4.2× faster than Phase 1 and the time no longer depends on sel
 
 Graphs: `scripts/plot_compare.py` writes `results/compare_load.png`, `compare_q1.png`, `compare_q2.png`, `compare_q2_count.png`, `compare_q3.png`, `compare_linkage.png`.
 
+## 2026-10-10: single-pass tokenizer (W-1, Windows 11 / WSL2)
+
+Machine W-1: Intel Core i9-13900HX (16 cores, 32 logical CPUs), 15 GiB visible
+to WSL2, Ubuntu, GCC 13.4.0, Release build. The verified dataset and
+build directories were on WSL's Linux filesystem rather than `/mnt/c`.
+
+Method: an external copy of the exact same `part-b` source restored only the
+previous multi-`find` tokenizer; the working build used the new single forward
+scan. Both used `--layout aos`. Runs were interleaved to reduce drift, with one
+warm-up per executable followed by 10 timed runs each. Both versions produced
+the same row counts with zero bad rows. The focused tokenizer test also compared
+every field from both 2024 CSVs against the previous parser, and the full
+dataset regression passed for both layouts.
+
+| Dataset | Rows | Previous mean ± sd | Single-pass mean ± sd | Speedup | Peak RSS |
+|---|---:|---:|---:|---:|---:|
+| 2024 ozone + NO₂ | 12,542,994 | 7.5812 ± 0.0246 s | 4.2995 ± 0.0295 s | 1.76× | 164.7 MB both |
+| All 12 files | 65,742,181 | 42.3366 ± 0.5626 s | 24.6615 ± 0.7702 s | 1.72× | 811.2 / 811.3 MB |
+
+The tokenizer reduced load time by 43% on 2024 and 42% on the full dataset
+without changing memory use or results. WSL reports RSS rather than the macOS
+physical-footprint metric, so these memory values must not be combined with the
+M-A footprint chart. Raw CSVs are in `~/cmpe275-results/` on W-1 and are not
+committed.
+
 ## Open items
 
 - Phase 2 Step 2 (library, column layout, static vs shared) is done and measured on M-A. Remaining: OpenMP in `part-b/omp` (W), then integrating W's single-pass tokenizer, time-only search and OpenMP into `part-b/lib`, and re-measuring. Add entries here as results arrive, including failures.
