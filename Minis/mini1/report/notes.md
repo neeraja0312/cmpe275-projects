@@ -395,7 +395,63 @@ barrier, and similarly report read-only query data; this is the known
 uninstrumented-libgomp limitation warned about by `Mini1Common.cmake`, not a
 claim of a clean TSan run. Raw CSVs are in `~/cmpe275-results/` on W-1.
 
+## 2026-10-11: ThreadSanitizer on macOS (M-A) for `part-b/omp`
+
+Built with `-DMINI1_SANITIZE=thread -DCMAKE_BUILD_TYPE=Debug` (Homebrew Clang + libomp), ran `omp_test_queries` (1,010 checks) and `omp_test_real_data` (19 checks) at 4 threads on the 2024 data. All checks pass; TSan reports 22 and 2 data-race warnings (exit 134), the same outcome as the Windows run (GCC, exit 66).
+
+Classification of all 24 warnings by their stack frames: every one pairs an access by a worker thread inside a parallel region (`DataLoader.cpp:248/436` per-file `RowBuilder`/results, `AosStore.cpp:113/138/140/144/145/186` per-segment partial results and read-only query data) with an access by the main thread to the same address after the region (`DataLoader.cpp:479/491/495`, `AosStore.cpp:129/149/150/156/182`). None pairs two worker threads. This is the pattern expected if TSan cannot see libomp's end-of-region barrier as a synchronization point, since the library is not TSan-instrumented. **This is an inference from the stack traces, not a proof**: a clean run would need an OpenMP runtime built with TSan/Archer support, which we did not have. The design relies on disjoint writes (one result slot per file or segment, `schedule(static, 1)`) and a serial merge after the region. Report this as a limitation, not as "TSan clean".
+
+## 2026-10-11: final measurements on M-A (AC power, after merging the Windows teammate's work)
+
+Machine M-A (Apple-silicon MacBook Air, 4 performance + 6 efficiency cores, 16 GB), plugged in, `caffeinate`, Release, Homebrew Clang 23. Driver `results/run_final.sh` (git-ignored); raw data `results/final-loads.csv`, `final-omp-queries.csv`, `b3-static-{aos,columns}-queries-full.csv`. Graphs: `scripts/plot_compare.py` (`compare_load.png`, `compare_omp_queries.png`, `compare_q2_count.png`, `compare_q1/q2/q3.png`).
+
+### Loads, full dataset (65,742,181 rows), 10 interleaved rounds, 1 warm-up
+
+| Build | mean s | median s | min..max | peak footprint |
+|---|---|---|---|---|
+| Phase 1 (`part-a`) | 24.15 | 23.61 | 23.32..26.55 | 764 MiB |
+| part-b rows (single-pass tokenizer) | 10.61 | 10.28 | 10.04..12.15 | 764 MiB |
+| part-b columns | 10.72 | 10.32 | 10.20..12.49 | 638 MiB |
+| OpenMP (`omp/`), 1 thread | 24.62 | 24.06 | 23.68..26.90 | 1,540 MiB |
+| OpenMP, 4 threads | 9.47 | 8.70 | 7.73..13.29 | 1,874 MiB |
+| OpenMP, 8 threads | 7.38 | 6.94 | 6.23..9.60 | 1,966 MiB |
+
+- The single-pass tokenizer alone makes the serial load **2.3× faster** than Phase 1 (23.6 to 10.3 s, medians) with identical memory. The Windows machine (W-1) measured 1.72×; the ratio differs by machine and must not be mixed.
+- OpenMP file-level parallelism reaches 3.5× (8 threads vs 1 thread, medians 24.06 to 6.94 s), but at 8 threads it is only 1.5× faster than the *serial* single-pass loader (10.3 s), and it needs 2.6× the memory. Per-file private row vectors that are merged afterwards roughly double the footprint even at 1 thread (1,540 vs 764 MiB). The OpenMP code has the old tokenizer; combining both was not done (see open items).
+- Outliers (26 s in the Phase 1 and OpenMP rows, 12 to 13 s in part-b) are single slow rounds, kept in the CSV.
+
+### OpenMP search scaling (ozone data, min of 10 in-process repeats)
+
+| Threads | Q2 count | Q2 copy | Q3 aggregate |
+|---|---|---|---|
+| 1 | 16.3 ms | 15.7 | 24.6 |
+| 2 | 8.2 | 9.9 | 15.6 |
+| 4 | 7.5 | 8.5 | 11.1 |
+| 6 | 5.8 (2.8×) | 6.8 | 9.0 (2.7×) |
+| 8 | 6.9 | 6.3 (2.5×) | 10.1 |
+| 10 | 5.7 (2.9×) | 6.8 | 10.7 |
+
+Speedup stops near 2.5 to 2.9× at 6 threads (W-1 measured up to 3.8×). Only six ozone files exist, so at most six units of work per query, and the Mac has four performance cores. Note that the serial part-b column `count` (2.7 ms) is already faster than the OpenMP row-layout count at any thread count (5.7 ms): the data layout and the inner loop matter more than threads for this query.
+
+### Searches, part-b with new tokenizer and indexed time-range search (min of 10)
+
+| Query | mode | Phase 1 | rows | columns |
+|---|---|---|---|---|
+| Q2 ozone, one hour (time-only) | count | 3.80 ms | **0.179 ms (21×)** | **0.127 ms (30×)** |
+| same | copy | 3.80 ms | 0.167 ms | 0.133 ms |
+| same | callback | 3.80 ms | 0.162 ms | 0.132 ms |
+| Q2 ozone > 0.070 | count | 11.4 ms | 8.28 ms | 4.26* ms |
+| Q2 ozone > 0.030 | count | 11.3 ms | 8.09 ms | 3.57 ms |
+| Q2 NO₂ > 100 ppb | count | 4.49 ms | 3.17 ms | 1.42 ms |
+
+*Outlier: three reruns of the same query with both pollutants loaded gave 2.73, 3.06 and 2.93 ms (columns) and 7.5 ms (rows); the whole-range path is unchanged code. The raw CSV is left as measured.
+
+The time-only search, the 3.80 ms baseline from Phase 1, is now 0.13 to 0.18 ms: each monitor's time-sorted block is binary-searched instead of scanning every row.
+
+Not an improvement, within noise: Q3 (rows 5.1 ms vs Phase 1 3.8 to 5.0 ms measured back to back in the same session), Q1, and the row-returning Q2 modes (copy, callback, virtual). **Session-to-session variance on this Mac is up to ±25% for large copies and Q3**: Phase 1 alone gave 58.5 to 64.9 ms for the 25M-row copy and 3.9 to 5.0 ms for Q3 in four consecutive measurements. part-b copy measured 69 to 82 ms in the same session, which may be a small real slowdown (the covered-segment path was refactored) or the same noise; we cannot separate them with these data. Do not claim a regression or a gain for these modes.
+
 ## Open items
 
-- Phase 2 Step 1, Step 2, the single-pass tokenizer, and indexed constrained-time Q2 are done. Remaining: integrate OpenMP into `part-b/lib` and re-measure on M-A.
+- Phase 2 Step 1 (`part-b/omp`), Step 2 (`part-b/lib`), the single-pass tokenizer and indexed time-range search are done and measured on M-A. **OpenMP is not combined with the library/column layout/new tokenizer** (`omp/` is a separate copy of the Phase 1 design). Suggested but not done: use the single-pass tokenizer in `omp/` and compare; add OpenMP to `part-b/lib`. The report must state this plainly.
+- ThreadSanitizer is not clean (Windows and macOS runs); see the section above.
 - Individual contributions and the AI-assisted Phase 1 code decision: undecided; needed for the report.

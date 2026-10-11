@@ -61,13 +61,16 @@ def grouped(ax, groups, series, scale, unit, log=False):
 
 
 def load_graphs():
-    rows = read("interleave_phase1_partb-aos_partb-cols.csv")
+    rows = read("final-loads.csv") or read("interleave_phase1_partb-aos_partb-cols.csv")
     if not rows:
         return
     names = [("phase1", "Phase 1"), ("partb-aos", "part-b rows"), ("partb-cols", "part-b columns")]
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 4.5))
+    if any(r["name"] == "omp8" for r in rows):
+        names += [("omp1", "OpenMP 1 thr"), ("omp4", "OpenMP 4 thr"), ("omp8", "OpenMP 8 thr")]
+        COLORS.update({"OpenMP 1 thr": "#aec7e8", "OpenMP 4 thr": "#98df8a", "OpenMP 8 thr": "#2ca02c"})
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(13, 4.8))
     data = [[float(r["load_s"]) for r in rows if r["name"] == k] for k, _ in names]
-    box = a1.boxplot(data, tick_labels=[v for _, v in names], patch_artist=True, showmeans=True)
+    box = a1.boxplot(data, tick_labels=[v.replace(" ", "\n", 1) for _, v in names], patch_artist=True, showmeans=True)
     for patch, (_, v) in zip(box["boxes"], names):
         patch.set_facecolor(COLORS[v])
         patch.set_alpha(0.6)
@@ -78,7 +81,7 @@ def load_graphs():
     a1.grid(axis="y", alpha=0.3)
 
     mem = [statistics.median(float(r["footprint_bytes"]) for r in rows if r["name"] == k) / 2**20 for k, _ in names]
-    bars = a2.bar([v for _, v in names], mem, color=[COLORS[v] for _, v in names])
+    bars = a2.bar([v.replace(" ", "\n", 1) for _, v in names], mem, color=[COLORS[v] for _, v in names])
     for b, y in zip(bars, mem):
         a2.annotate(f"{y:.0f} MiB", (b.get_x() + b.get_width() / 2, y), ha="center", va="bottom", fontsize=9)
     a2.set_ylabel("peak footprint, MiB")
@@ -89,10 +92,13 @@ def load_graphs():
 
 def query_graphs():
     p1 = table(read("a-queries-full.csv"))
-    ao = table(read("b-static-aos-queries-full.csv"))
-    co = table(read("b-static-columns-queries-full.csv"))
+    # b3-* = final run (new tokenizer + indexed time-range search); b-* = earlier Step 2 run
+    ao = table(read("b3-static-aos-queries-full.csv") or read("b-static-aos-queries-full.csv"))
+    co = table(read("b3-static-columns-queries-full.csv") or read("b-static-columns-queries-full.csv"))
     sh_a = table(read("b-shared-aos-queries-full.csv"))
     sh_c = table(read("b-shared-columns-queries-full.csv"))
+    old_a = table(read("b-static-aos-queries-full.csv"))
+    old_c = table(read("b-static-columns-queries-full.csv"))
     ca = table(read("b2-static-aos-count-after.csv"))
     cc = table(read("b2-static-columns-count-after.csv"))
     if not (p1 and ao and co):
@@ -129,12 +135,15 @@ def query_graphs():
 
     # Q2 count: before/after the count-loop fix
     series = [("Phase 1", COLORS["Phase 1"], by(p1, "count")),
-              ("rows, old loop", "#9ecae1", by(ao, "count")),
-              ("columns, old loop", "#fcae91", by(co, "count"))]
+              ("rows, old loop", "#9ecae1", by(old_a, "count")),
+              ("columns, old loop", "#fcae91", by(old_c, "count"))]
     if ca:
         series.append(("rows, new loop", COLORS["part-b rows"], by(ca, "count")))
     if cc:
         series.append(("columns, new loop", COLORS["part-b columns"], by(cc, "count")))
+    if ao is not old_a:
+        series.append(("rows, final (+ indexed time)", "#6baed6", by(ao, "count")))
+        series.append(("columns, final (+ indexed time)", "#a50f15", by(co, "count")))
     fig, ax = plt.subplots(figsize=(10, 4.8))
     grouped(ax, groups, series, 1e3, "milliseconds")
     ax.legend(fontsize=8)
@@ -166,6 +175,33 @@ def query_graphs():
         save(fig, "compare_linkage.png")
 
 
+def omp_graph():
+    rows = read("final-omp-queries.csv")
+    if not rows:
+        return
+    threads = sorted({int(r["threads"]) for r in rows})
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.5))
+    for q, lab in [("q2-count", "Q2 count"), ("q2-copy", "Q2 copy"), ("q3-none", "Q3 aggregate")]:
+        t = {int(r["threads"]): float(r["query_s_min"]) for r in rows if r["query"] == q}
+        a1.plot(threads, [t[x] * 1e3 for x in threads], "o-", label=lab)
+        a2.plot(threads, [t[1] / t[x] for x in threads], "o-", label=lab)
+    a2.plot(threads, threads, "k--", lw=0.8, label="ideal")
+    a1.set_ylabel("milliseconds")
+    a1.set_title("OpenMP searches, ozone data (min of 10)")
+    a2.set_ylabel("speedup vs 1 thread")
+    a2.set_title("Speedup (M-A: 4 performance + 6 efficiency cores)")
+    for a in (a1, a2):
+        a.set_xlabel("threads")
+        a.set_xticks(threads)
+        a.grid(alpha=0.3)
+        a.legend(fontsize=8)
+    save(fig, "compare_omp_queries.png")
+    loads = read("final-loads.csv")
+    if loads and any(r["name"] == "omp8" for r in loads):
+        pass
+
+
 if __name__ == "__main__":
+    omp_graph()
     load_graphs()
     query_graphs()

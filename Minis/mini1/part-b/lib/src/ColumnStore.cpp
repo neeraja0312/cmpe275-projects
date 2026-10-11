@@ -131,7 +131,7 @@ void ColumnStore::indexedRanges(const Segment& segment, HourRange range, std::ve
             out.push_back({static_cast<std::uint32_t>(lo - hours_.data()),
                            static_cast<std::uint32_t>(hi - hours_.data())});
         }
-}
+    }
     std::sort(out.begin(), out.end(), [](const RowRange& a, const RowRange& b) { return a.begin < b.begin; });
 }
 

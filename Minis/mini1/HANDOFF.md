@@ -1,11 +1,12 @@
 # Mini 1 handoff
 
-Done: Phase 1; Phase 2 Step 1 (`part-b/omp`); Phase 2 Step 2 (library, column
-layout, static vs shared); the single-pass tokenizer; indexed constrained-time
-queries; correctness tests; and Windows/WSL benchmarks. Still to do: integrate
-OpenMP into `part-b/lib`, run the final macOS benchmarks, then finish the report,
-slide and submission.
-Build, run and dataset instructions are in [README.md](README.md). The assignment
+**All code and measurements are done.** Phase 1 (library, baselines, memory fix),
+Phase 2 Step 1 (OpenMP, `part-b/omp`), Phase 2 Step 2 (library, column layout,
+static vs shared, single-pass tokenizer, indexed time-range search, `part-b/lib`)
+and the final benchmarks on the macOS machine are finished and in
+`report/notes.md`. **Still to do: the report, the slide, individual
+contributions, and the final package.** OpenMP is *not* combined with the
+library (see "Known limitations"). Build, run and dataset instructions are in [README.md](README.md). The assignment
 is in [mini1-edges.md](mini1-edges.md).
 
 ## Decide first: AI-written code
@@ -21,11 +22,11 @@ section still has to say who wrote what.
 
 Two people share the remaining work (the Phase 1 author is done).
 
-| Teammate | Owns |
-|---|---|
-| macOS teammate (Apple-silicon Mac) | Done: memory fix, Phase 1 baselines, Phase 2 Step 2 (`part-b/lib`, `part-b/app`, tests, benchmarks, graphs). To do: integrate the Windows teammate's pieces into `part-b/lib`, OpenMP inside the library, all final benchmarks and graphs, re-run the Step 2 benchmarks cleanly on AC power, `scripts/package.sh` |
-| Windows teammate (WSL, gcc 13+) | Done: `part-b/omp/` (OpenMP searches and file-parallel loading), single-pass tokenizer, indexed constrained-time search, tests, sanitizers and WSL benchmarks |
-| Both | Report, slide, individual contributions, the AI-written-code decision |
+| Teammate | Did | Still to do |
+|---|---|---|
+| macOS teammate | Memory fix, Phase 1 baselines, Phase 2 Step 2 (`part-b/lib`, `part-b/app`, tests), count-loop fix, all final benchmarks and graphs on the Mac | Report sections, slide, contributions entry, `scripts/package.sh` |
+| Windows teammate | `part-b/omp/` (OpenMP searches and loading, TSan run), single-pass tokenizer and indexed time-range search (merged into `part-b/lib`), Windows-side measurements (machine W-1) | Report sections, contributions entry |
+| Both | | Report, slide, individual contributions, the AI-written-code decision |
 
 Report split: the macOS teammate writes the Phase 1 baseline, memory
 measurement, library/layout/static-vs-shared and final benchmark sections (all
@@ -34,7 +35,7 @@ search sections (design, correctness, failures) and their own contributions
 paragraph. Each person writes their own entry in the individual contributions
 section. The slide finding is picked together.
 
-What the Windows teammate hands over (so integration is mechanical):
+What the Windows teammate handed over (all merged and tested on macOS):
 - `part-b/omp/`: its own Phase 1 source copy building `mini1_b_omp`, with deterministic file-parallel loading and Q2/Q3 searches. ASan/UBSan passes; GCC ThreadSanitizer reports documented false positives across uninstrumented libgomp barriers while all checks complete successfully.
 - Single-pass tokenizer: a class with the same interface as `CsvTokenizer` in `part-b/lib/src/CsvTokenizer.hpp` plus a test that it returns identical fields on the 2024 files. Drop-in replacement, no other file changes.
 - Time-only search: a method on the store that gives the same results as `countByValue`/`selectByValue` for time-only queries, using a binary search in each monitor's blocks, plus a test comparing it to the scan on the 2024 data (`part-b/tests/test_layouts_agree.cpp` shows how).
@@ -51,7 +52,7 @@ What the Windows teammate hands over (so integration is mechanical):
 | Scripts | `run_bench.sh` (repeated runs; records `footprint_bytes`), `plot.py`, `plot_queries.py`, `plot_compare.py` (Phase 1 vs part-b graphs), `package.sh` (submission tar.gz) |
 | `report/` | `notes.md`: committable lab log with all results, failures and the Step 2 findings. The report text itself is still to be written |
 
-Step 2 results in one paragraph (details in `report/notes.md`): the library boundary and static vs shared cost nothing measurable (loads 23.6 s in all three variants when interleaved on AC power; searches within 1 to 2%). The column layout uses 16% less memory (669 vs 801 MB), makes narrow queries faster (Q2 `count` 11.4 to 2.73 ms after the loop fix, Q1 `scan` 2.5×) and makes row-returning modes slower (`copy` 1.25×, `callback`/`virtual` ~2×, Q1 `copy` 9×).
+Final M-A numbers (AC power, details and caveats in `report/notes.md`): full load 23.6 s (Phase 1) to 10.3 s (part-b, single-pass tokenizer, 2.3×); OpenMP file-parallel load 24.1 s (1 thread) to 6.9 s (8 threads, 3.5×) but 1.5× faster than the serial new loader at 2.6× the memory; OpenMP searches scale to about 2.8× at 6 threads; time-only search 3.80 ms to 0.13 to 0.18 ms (21 to 30×). Earlier Step 2 findings: the library boundary and static vs shared cost nothing measurable (searches within 1 to 2%). The column layout uses 16% less memory (669 vs 801 MB), makes narrow queries faster (Q2 `count` 11.4 to 2.73 ms after the loop fix, Q1 `scan` 2.5×) and makes row-returning modes slower (`copy` 1.25×, `callback`/`virtual` ~2×, Q1 `copy` 9×).
 
 ### Phase 1 design
 
@@ -134,8 +135,15 @@ and `plot.py` graphs that column. `peak_rss_bytes` is kept unchanged.
 
 ## Phase 2 findings and remaining costs
 
-1. **Indexed time ranges are done.** Binary-searching each monitor block made one-hour Q2 queries 33–43× faster and five-day queries 8–23× faster on W-1, with no whole-segment regression.
-2. **Single-pass tokenization is done.** It made 2024 loads 1.76× and full loads 1.72× faster on W-1 with identical fields and memory use.
+1. **Indexed time ranges are done.** Binary-searching each monitor block made one-hour Q2 queries 33–43× faster and five-day queries 8–23× faster on W-1 (21× rows, 30× columns on the Mac: 3.80 to 0.18 and 0.13 ms), with no whole-segment regression.
+2. **Single-pass tokenization is done.** 1.72× on W-1, 2.3× on the Mac, identical fields and memory.
+
+### Known limitations (state these in the report)
+
+- **OpenMP is not combined with the library.** `part-b/omp/` is a separate copy of the Phase 1 design with the old tokenizer and the row layout only; `part-b/lib` is serial. The combination (single-pass tokenizer + columns + threads) was not built or measured.
+- **ThreadSanitizer is not clean** (Windows/GCC and macOS/Clang both report races at OpenMP barrier boundaries; every warning pairs a worker access with a main-thread access after the region, which is consistent with an uninstrumented libomp barrier, but this is an inference).
+- **OpenMP load uses 2.0 to 2.6× the memory** (1.5 to 2.0 GB vs 0.76 GB) because per-file buffers are merged afterwards.
+- Large-copy and Q3 timings have about ±25% session-to-session noise on the Mac; only the time-only, `count` and load changes are clear.
 3. **Per-row virtual calls and result copies are expensive** (see tables above). The column layout helps `count` but not the row-returning modes (measured, see `report/notes.md`).
 
 ## To do, in order
@@ -154,8 +162,7 @@ and `plot.py` graphs that column. `peak_rss_bytes` is kept unchanged.
    - Stage 1: port Phase 1 behind the facade, still with the array-of-structs store. Compare static vs shared builds (`-DBUILD_SHARED_LIBS=ON`) and measure the cost of the library boundary.
    - Stage 2: add the column layout (SoA) as another `MeasurementStore`: Q2 then reads 2 bytes per row instead of 12. Re-measure all result-return modes.
    - Stages 1 and 2 are **done and measured**. The tokenizer and indexed-time changes are already in `part-b/lib`.
-   - Stage 3: integrate the proven `part-b/omp` patterns inside the library and measure the combination.
-   - Before the final numbers: re-run `results/run_all_stages.sh` on AC power (the Step 2 searches other than Q2 `count` were measured partly on battery, see `report/notes.md`).
+   - Stage 3 (OpenMP inside the library): **not done**, see Known limitations. Final benchmarks were re-run on AC power (`results/run_final.sh`, results in `report/notes.md`).
 5. **Report, slide and submission (both; split as in the team table):**
    - Revisit the AI-code question (top of this file) before writing the contributions entries.
    - Each teammate sets git `user.name` and `user.email` before committing (macOS teammate: done).
