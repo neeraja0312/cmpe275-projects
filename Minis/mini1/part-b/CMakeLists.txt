@@ -18,12 +18,29 @@ include(${CMAKE_SOURCE_DIR}/../cmake/Mini1Common.cmake)
 find_package(OpenMP REQUIRED)
 
 # ---- Step 1: OpenMP applied to the Phase 1 design -------------------------
-file(GLOB_RECURSE OMP_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/omp/src/*.cpp)
+file(GLOB_RECURSE OMP_ALL_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/omp/src/*.cpp)
+set(OMP_MAIN_SOURCE ${CMAKE_SOURCE_DIR}/omp/src/main.cpp)
+set(OMP_CORE_SOURCES ${OMP_ALL_SOURCES})
+list(REMOVE_ITEM OMP_CORE_SOURCES ${OMP_MAIN_SOURCE})
 
-if(OMP_SOURCES)
-  add_executable(mini1_b_omp ${OMP_SOURCES})
-  target_include_directories(mini1_b_omp PRIVATE ${CMAKE_SOURCE_DIR}/omp/include)
-  target_link_libraries(mini1_b_omp PRIVATE OpenMP::OpenMP_CXX)
+if(OMP_CORE_SOURCES)
+  add_library(mini1_b_omp_core OBJECT ${OMP_CORE_SOURCES})
+  target_include_directories(mini1_b_omp_core PUBLIC ${CMAKE_SOURCE_DIR}/omp/include)
+  target_link_libraries(mini1_b_omp_core PUBLIC OpenMP::OpenMP_CXX)
+
+  if(EXISTS ${OMP_MAIN_SOURCE})
+    add_executable(mini1_b_omp ${OMP_MAIN_SOURCE})
+    target_link_libraries(mini1_b_omp PRIVATE mini1_b_omp_core)
+  endif()
+
+  file(GLOB OMP_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/omp/tests/*.cpp)
+  foreach(src IN LISTS OMP_TEST_SOURCES)
+    get_filename_component(name ${src} NAME_WE)
+    set(target omp_${name})
+    add_executable(${target} ${src})
+    target_link_libraries(${target} PRIVATE mini1_b_omp_core)
+    add_test(NAME ${target} COMMAND ${target} ${MINI1_DATA_DIR})
+  endforeach()
 else()
   message(WARNING "part-b: no .cpp files in omp/src/ yet - mini1_b_omp not built")
 endif()
@@ -41,6 +58,9 @@ if(LIB_SOURCES)
     PUBLIC  ${CMAKE_SOURCE_DIR}/lib/include
     PRIVATE ${CMAKE_SOURCE_DIR}/lib/src)
   target_link_libraries(aqdata PUBLIC OpenMP::OpenMP_CXX)
+  # Only names marked AQ_API (lib/include/aqdata/Export.hpp) are visible outside
+  # the library, so the internals stay private in the shared build too.
+  set_target_properties(aqdata PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 
   if(APP_SOURCES)
     add_executable(mini1_b ${APP_SOURCES})
@@ -50,6 +70,11 @@ if(LIB_SOURCES)
   endif()
 
   mini1_add_tests(${CMAKE_SOURCE_DIR}/tests aqdata)
+  # The tokenizer is intentionally private to the library; its focused test
+  # may include that private header without exposing it to the application.
+  if(TARGET test_tokenizer)
+    target_include_directories(test_tokenizer PRIVATE ${CMAKE_SOURCE_DIR}/lib/src)
+  endif()
 else()
   message(WARNING "part-b: no .cpp files in lib/src/ yet - library, app and tests not built")
 endif()
