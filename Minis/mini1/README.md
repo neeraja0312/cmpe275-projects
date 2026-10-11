@@ -4,7 +4,8 @@ C++ library that loads EPA hourly air-quality data (ozone and NO₂, 2021–2026
 and searches it. The assignment is in [mini1-edges.md](mini1-edges.md).
 
 - `part-a/`: Phase 1, serial
-- `part-b/`: Phase 2, libraries and layouts (`lib/`, `app/`, `tests/`: done); OpenMP (`omp/`: not started)
+- `part-b/`: Phase 2, libraries/layouts (`lib/`, `app`, `tests`) and the
+  isolated OpenMP experiment (`omp/`)
 
 ## Dataset
 
@@ -56,6 +57,17 @@ cmake --build part-a/build
 
 Add `-DMINI1_SANITIZE=address` (in a separate build folder) for a
 memory-checked build. Benchmark only the default Release build.
+
+For Phase 2 Step 1 on Linux/WSL (GCC 13+), keep generated files on the Linux
+filesystem when the source tree is under `/mnt/c`:
+
+```bash
+cmake -S part-b -B ~/cmpe275-build/part-b -DCMAKE_CXX_COMPILER=g++-13 \
+  -DCMAKE_BUILD_TYPE=Release -DMINI1_DATA_DIR="$HOME/cmpe275-data"
+cmake --build ~/cmpe275-build/part-b --target mini1_b_omp -j 8
+OMP_NUM_THREADS=8 ~/cmpe275-build/part-b/mini1_b_omp "$HOME/cmpe275-data" load
+ctest --test-dir ~/cmpe275-build/part-b --output-on-failure -R '^omp_'
+```
 
 ## Run
 

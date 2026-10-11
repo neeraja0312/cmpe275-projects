@@ -331,7 +331,71 @@ ranges in both layouts; the 2024 layout-equivalence test, all normal tests, the
 65,742,181-row full regression, and the ASan/UBSan synthetic query test passed.
 Raw benchmark CSVs are in `~/cmpe275-results/` on W-1.
 
+## 2026-10-11: Phase 2 Step 1, OpenMP (W-1)
+
+`part-b/omp` is an isolated copy of the Phase 1 design. Q2 count uses an
+OpenMP reduction, Q2 copy writes one result vector per input segment and merges
+them in file order, and Q3 writes per-thread `Stats` arrays before a serial
+merge. Q1, callbacks and the per-row virtual experiment remain serial because
+their interfaces or query size make thread startup inappropriate.
+
+Loading parses discovered files in parallel. Every file has a private monitor
+registry, qualifier/method dictionaries and row vector; the main thread merges
+files in discovery order and renumbers local ids. This preserves serial row,
+monitor and dictionary order at every thread count. File-level parallelism was
+already strong, so byte-chunking individual files was not added.
+
+### Full-data load scaling
+
+W-1, Release, verified 65,742,181-row dataset on the WSL filesystem. One warm-up
+per thread count, then 10 timed runs interleaved forward/reverse.
+
+| Threads | Mean ± sd | Speedup vs 1 thread | Efficiency | Mean peak RSS |
+|---:|---:|---:|---:|---:|
+| 1 | 43.416 ± 0.575 s | 1.00× | 100% | 915 MB |
+| 2 | 23.533 ± 1.770 s | 1.84× | 92% | 924 MB |
+| 4 | 12.654 ± 0.291 s | 3.43× | 86% | 943 MB |
+| 6 | 9.196 ± 0.104 s | 4.72× | 79% | 949 MB |
+| 8 | 7.299 ± 0.314 s | **5.95×** | 74% | 1,061 MB |
+| 10 | 7.445 ± 0.411 s | 5.83× | 58% | 1,070 MB |
+
+Against the 42.337 s W-1 Phase 1 baseline, 8 threads are 5.80× faster. Scaling
+stops after 8 threads while memory rises because more per-file parse buffers
+are live concurrently. Every run loaded the exact row total with zero bad rows.
+
+### Query scaling
+
+Full dataset, 20 in-process repeats, minimum shown. Q2 searched all ozone years
+above 0.070 ppm (281,349 rows); Q3 aggregated all 47,005,021 ozone rows.
+
+| Threads | Q2 count | Q2 copy | Q3 ungrouped |
+|---:|---:|---:|---:|
+| 1 | 49.276 ms | 58.304 ms | 51.992 ms |
+| 2 | 29.459 ms | 35.411 ms | 31.090 ms |
+| 4 | 20.510 ms | 25.795 ms | 21.569 ms |
+| 6 | **13.396 ms (3.68×)** | **15.304 ms (3.81×)** | 14.262 ms (3.65×) |
+| 8 | 13.503 ms | 15.422 ms | 14.555 ms |
+| 10 | 14.326 ms | 17.200 ms | **13.655 ms (3.81×)** |
+
+**Failed first attempt:** contiguous `schedule(static)` assigned all six ozone
+segments to one worker at two threads and all six NO₂ segments (immediately
+skipped) to the other, giving no speedup. `schedule(static, 1)` distributes
+pollutant segments round-robin. Useful work is only six ozone files, explaining
+the query plateau around six threads. Counts and copy checksums matched at every
+thread count.
+
+### Validation and sanitizer result
+
+The five copied Phase 1 tests pass at 1 and 4 threads. The full-dataset test
+passes at 1 and 8 threads (17/17 checks), and ASan/UBSan passes at four threads.
+GCC ThreadSanitizer completed all 1,010 synthetic checks but exited 66 after
+reporting races across OpenMP barriers. The reports pair worker writes to
+separate preallocated file/segment results with reads after the implicit
+barrier, and similarly report read-only query data; this is the known
+uninstrumented-libgomp limitation warned about by `Mini1Common.cmake`, not a
+claim of a clean TSan run. Raw CSVs are in `~/cmpe275-results/` on W-1.
+
 ## Open items
 
-- Phase 2 Step 2, the single-pass tokenizer, and indexed constrained-time Q2 are done. Remaining: OpenMP in `part-b/omp` (W), then integrating OpenMP into `part-b/lib` and re-measuring on M-A. Add entries here as results arrive, including failures.
+- Phase 2 Step 1, Step 2, the single-pass tokenizer, and indexed constrained-time Q2 are done. Remaining: integrate OpenMP into `part-b/lib` and re-measure on M-A.
 - Individual contributions and the AI-assisted Phase 1 code decision: undecided; needed for the report.

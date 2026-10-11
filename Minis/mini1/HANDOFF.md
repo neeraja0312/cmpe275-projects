@@ -1,10 +1,10 @@
 # Mini 1 handoff
 
-Done: Phase 1 (code, tests, memory-measurement fix, full-dataset baselines) and
-Phase 2 Step 2 (library, column layout, static vs shared, benchmarks, graphs).
-Still to do: Phase 2 Step 1 (OpenMP) and two optimizations (single-pass
-tokenizer, time-only search) from the Windows teammate, their integration and the
-final benchmarks by the macOS teammate, then the report, slide and submission.
+Done: Phase 1; Phase 2 Step 1 (`part-b/omp`); Phase 2 Step 2 (library, column
+layout, static vs shared); the single-pass tokenizer; indexed constrained-time
+queries; correctness tests; and Windows/WSL benchmarks. Still to do: integrate
+OpenMP into `part-b/lib`, run the final macOS benchmarks, then finish the report,
+slide and submission.
 Build, run and dataset instructions are in [README.md](README.md). The assignment
 is in [mini1-edges.md](mini1-edges.md).
 
@@ -24,7 +24,7 @@ Two people share the remaining work (the Phase 1 author is done).
 | Teammate | Owns |
 |---|---|
 | macOS teammate (Apple-silicon Mac) | Done: memory fix, Phase 1 baselines, Phase 2 Step 2 (`part-b/lib`, `part-b/app`, tests, benchmarks, graphs). To do: integrate the Windows teammate's pieces into `part-b/lib`, OpenMP inside the library, all final benchmarks and graphs, re-run the Step 2 benchmarks cleanly on AC power, `scripts/package.sh` |
-| Windows teammate (WSL, gcc 13+) | `part-b/omp/` (OpenMP searches and chunked loading, ThreadSanitizer run); single-pass tokenizer and time-only search, each as a self-contained class with tests. Must commit this code |
+| Windows teammate (WSL, gcc 13+) | Done: `part-b/omp/` (OpenMP searches and file-parallel loading), single-pass tokenizer, indexed constrained-time search, tests, sanitizers and WSL benchmarks |
 | Both | Report, slide, individual contributions, the AI-written-code decision |
 
 Report split: the macOS teammate writes the Phase 1 baseline, memory
@@ -35,10 +35,10 @@ paragraph. Each person writes their own entry in the individual contributions
 section. The slide finding is picked together.
 
 What the Windows teammate hands over (so integration is mechanical):
-- `part-b/omp/`: its own copy of the sources with OpenMP, building `mini1_b_omp` (the CMake target already exists), with tests that pass under `-DMINI1_SANITIZE=thread`.
+- `part-b/omp/`: its own Phase 1 source copy building `mini1_b_omp`, with deterministic file-parallel loading and Q2/Q3 searches. ASan/UBSan passes; GCC ThreadSanitizer reports documented false positives across uninstrumented libgomp barriers while all checks complete successfully.
 - Single-pass tokenizer: a class with the same interface as `CsvTokenizer` in `part-b/lib/src/CsvTokenizer.hpp` plus a test that it returns identical fields on the 2024 files. Drop-in replacement, no other file changes.
 - Time-only search: a method on the store that gives the same results as `countByValue`/`selectByValue` for time-only queries, using a binary search in each monitor's blocks, plus a test comparing it to the scan on the 2024 data (`part-b/tests/test_layouts_agree.cpp` shows how).
-- No benchmark numbers are reported from Windows; those runs only check correctness. Nothing macOS-only outside `MemoryUsage.cpp`. Each person works in their own directories so merges do not conflict.
+- Windows/WSL results are labeled W-1 and kept separate from M-A. The macOS teammate still produces the final comparable report graphs. Nothing macOS-only lives outside `MemoryUsage.cpp`.
 
 ## What exists
 
@@ -47,7 +47,7 @@ What the Windows teammate hands over (so integration is mechanical):
 | Dataset | 12 EPA CSVs: 65,742,181 rows, 15.5 GB. `scripts/get_data.sh` downloads them and checks the pinned SHA-256 sums (EPA's server can reset the connection mid-download; re-running the script resumes) |
 | Build | CMake with Homebrew Clang (Apple's clang is rejected on purpose); OpenMP is found for `part-b` |
 | `part-a/` (Phase 1) | Serial library, the `mini1_a` driver, 5 test programs, all passing |
-| `part-b/` (Phase 2) | **Step 2 done (macOS teammate):** `lib/` (library `aqdata`, pimpl `aq::Database`, hidden internals, row and column layouts, static or shared with `-DBUILD_SHARED_LIBS=ON`), `app/` (`mini1_b`, public API only, `--layout aos\|columns`), `tests/` (3 programs, ASan/UBSan clean, both layouts). **Not started:** `omp/` (Windows teammate); CMake builds `mini1_b_omp` once it has sources |
+| `part-b/` (Phase 2) | **Step 1 done:** isolated `omp/` source, `mini1_b_omp`, five test programs, deterministic file-parallel loading and Q2/Q3. **Step 2 done:** `lib/` (`aqdata`, pimpl facade, row/column layouts, static/shared), `app/` (`mini1_b`) and tests. |
 | Scripts | `run_bench.sh` (repeated runs; records `footprint_bytes`), `plot.py`, `plot_queries.py`, `plot_compare.py` (Phase 1 vs part-b graphs), `package.sh` (submission tar.gz) |
 | `report/` | `notes.md`: committable lab log with all results, failures and the Step 2 findings. The report text itself is still to be written |
 
@@ -132,30 +132,29 @@ wrong or noisy too (95 MB in one of ten identical runs; 1.2–1.4 GB against a t
 1 MB between runs. `run_bench.sh` records it in a new `footprint_bytes` column
 and `plot.py` graphs that column. `peak_rss_bytes` is kept unchanged.
 
-## Known problems (still open, planned for Phase 2)
+## Phase 2 findings and remaining costs
 
-1. **Time-only searches scan everything.** Rows are ordered by monitor and then time, so "all readings in this hour" without a monitor can only skip whole files. Binary-searching each monitor's blocks (~1,300 small searches) should be much faster. Baseline: 3.80 ms. Owner: Windows teammate.
-2. **Line splitting is the load bottleneck** (~78%). `CsvTokenizer::split` calls `find` twice per field, about 600M short `memchr` calls for 2024. A single-pass tokenizer should cut load time a lot (not measured yet). Owner: Windows teammate.
+1. **Indexed time ranges are done.** Binary-searching each monitor block made one-hour Q2 queries 33–43× faster and five-day queries 8–23× faster on W-1, with no whole-segment regression.
+2. **Single-pass tokenization is done.** It made 2024 loads 1.76× and full loads 1.72× faster on W-1 with identical fields and memory use.
 3. **Per-row virtual calls and result copies are expensive** (see tables above). The column layout helps `count` but not the row-returning modes (measured, see `report/notes.md`).
 
 ## To do, in order
 
 1. ~~Fix memory measurement~~ done.
 2. ~~Phase 1 baseline benchmarks~~ done. Not done: Q4 was not benchmarked (not required), and the graphs (`plot.py` needs a venv: `python3 -m venv .venv && .venv/bin/pip install matplotlib`).
-3. **Phase 2 Step 1 (`part-b/omp/`), owner Windows teammate:** copy the Phase 1 sources there and add OpenMP.
-   - Start with the searches: Q2 count is a `reduction`; Q3 uses per-thread `Stats`, merged at the end; Q2 copy uses per-thread result lists, merged in order.
-   - Then loading: split files into chunks at newlines; each thread gets its own registry and dictionaries, then merge and renumber the IDs.
-   - Leave Q1 serial and measure why (thread start-up costs more than the 0.4 µs query).
-   - Benchmark with `OMP_NUM_THREADS=1,2,4,6,8,10` and plot speedup against the Phase 1 baseline above. Expect a bend after 4 threads (the efficiency cores). Final timings are taken on the macOS machine.
-   - Check for data races with `-DMINI1_SANITIZE=thread`.
+3. ~~**Phase 2 Step 1 (`part-b/omp/`)**~~ done.
+   - Q2 count uses reduction; Q2 copy uses ordered per-segment buckets; Q3 uses per-thread `Stats`; Q1 remains serial.
+   - Loading parses files in parallel with worker-local registries/dictionaries, then merges and renumbers in discovery order. File-level parallelism reached 5.95× at 8 threads on W-1, so byte-chunking individual files was not added.
+   - Benchmarked `OMP_NUM_THREADS=1,2,4,6,8,10`; query scheduling changed from contiguous to round-robin after the first run exposed pollutant imbalance.
+   - ASan/UBSan passes. ThreadSanitizer's libgomp barrier false positives and successful checks are recorded in `report/notes.md`.
 4. **Phase 2 Step 2 (`part-b/lib` + `part-b/app`), owner macOS teammate**, in stages so each change is measured on its own:
    - Design decisions already made:
      - **Pimpl facade:** `lib/include` holds only the public value types and one `Database` class with a private implementation. The store, loader, registry and tokenizer are private in `lib/src`, so the app cannot include them.
      - **Q1 `view` on a column layout** returns a column slice (a struct of spans for hours, values, qualifiers and methods), which stays zero-copy.
    - Stage 1: port Phase 1 behind the facade, still with the array-of-structs store. Compare static vs shared builds (`-DBUILD_SHARED_LIBS=ON`) and measure the cost of the library boundary.
    - Stage 2: add the column layout (SoA) as another `MeasurementStore`: Q2 then reads 2 bytes per row instead of 12. Re-measure all result-return modes.
-   - Stages 1 and 2 are **done and measured** (macOS teammate). What remains for the macOS teammate is stage 3, blocked on the Windows teammate's deliverables:
-   - Stage 3: integrate the Windows teammate's single-pass tokenizer and time-only search, then OpenMP inside the library, and measure the combination.
+   - Stages 1 and 2 are **done and measured**. The tokenizer and indexed-time changes are already in `part-b/lib`.
+   - Stage 3: integrate the proven `part-b/omp` patterns inside the library and measure the combination.
    - Before the final numbers: re-run `results/run_all_stages.sh` on AC power (the Step 2 searches other than Q2 `count` were measured partly on battery, see `report/notes.md`).
 5. **Report, slide and submission (both; split as in the team table):**
    - Revisit the AI-code question (top of this file) before writing the contributions entries.
