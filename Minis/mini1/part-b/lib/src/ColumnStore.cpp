@@ -118,11 +118,29 @@ std::size_t ColumnStore::rangeByMonitorScan(MonitorId monitor, HourRange range) 
 
 // ---- Q2 --------------------------------------------------------------------
 
+void ColumnStore::indexedRanges(const Segment& segment, HourRange range, std::vector<RowRange>& out) const {
+    out.clear();
+    for (const auto& monitorBlocks : blocks_) {
+        for (const Block& block : monitorBlocks) {
+            if (block.begin < segment.begin || block.begin >= segment.end) continue;
+            if (!range.overlaps(block.first, block.last)) continue;
+            const HourIndex* first = hours_.data() + block.begin;
+            const HourIndex* lo = std::lower_bound(first, first + block.count, range.begin);
+            const HourIndex* hi = std::lower_bound(lo, first + block.count, range.end);
+            if (lo == hi) continue;
+            out.push_back({static_cast<std::uint32_t>(lo - hours_.data()),
+                           static_cast<std::uint32_t>(hi - hours_.data())});
+        }
+}
+    std::sort(out.begin(), out.end(), [](const RowRange& a, const RowRange& b) { return a.begin < b.begin; });
+}
+
 template <typename OnMatch>
 void ColumnStore::scanValues(const ValueQuery& query, OnMatch&& onMatch) const {
     const ScaledValue lo = query.lo;
     const ScaledValue hi = query.hi;
     const ScaledValue* values = values_.data();
+    std::vector<RowRange> ranges;
     for (const Segment& segment : segments_) {
         if (segment.pollutant != query.pollutant) continue;
         if (!query.range.overlaps(segment.minHour, segment.maxHour)) continue;
@@ -133,8 +151,11 @@ void ColumnStore::scanValues(const ValueQuery& query, OnMatch&& onMatch) const {
                 if (values[i] >= lo && values[i] <= hi) onMatch(i);
             }
         } else {
-            for (std::uint32_t i = segment.begin; i < segment.end; ++i) {
-                if (values[i] >= lo && values[i] <= hi && query.range.contains(hours_[i])) onMatch(i);
+            indexedRanges(segment, query.range, ranges);
+            for (const RowRange& range : ranges) {
+                for (std::uint32_t i = range.begin; i < range.end; ++i) {
+                    if (values[i] >= lo && values[i] <= hi) onMatch(i);
+                }
             }
         }
     }
@@ -167,16 +188,19 @@ std::size_t countInRange(const ScaledValue* values, std::size_t n, ScaledValue l
 std::size_t ColumnStore::countByValue(const ValueQuery& query) const {
     const ScaledValue lo = query.lo;
     const ScaledValue hi = query.hi;
+    if (lo > hi) return 0;
     const ScaledValue* values = values_.data();
     std::size_t count = 0;
+    std::vector<RowRange> ranges;
     for (const Segment& segment : segments_) {
         if (segment.pollutant != query.pollutant) continue;
         if (!query.range.overlaps(segment.minHour, segment.maxHour)) continue;
         if (query.range.covers(segment.minHour, segment.maxHour)) {
             count += countInRange(values + segment.begin, segment.end - segment.begin, lo, hi);
         } else {
-            for (std::uint32_t i = segment.begin; i < segment.end; ++i) {
-                if (values[i] >= lo && values[i] <= hi && query.range.contains(hours_[i])) ++count;
+            indexedRanges(segment, query.range, ranges);
+            for (const RowRange& range : ranges) {
+                count += countInRange(values + range.begin, range.end - range.begin, lo, hi);
             }
         }
     }

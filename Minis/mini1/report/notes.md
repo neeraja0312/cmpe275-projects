@@ -301,7 +301,37 @@ physical-footprint metric, so these memory values must not be combined with the
 M-A footprint chart. Raw CSVs are in `~/cmpe275-results/` on W-1 and are not
 committed.
 
+## 2026-10-10: indexed constrained-time Q2 (W-1)
+
+Partially overlapping time ranges now reuse the per-monitor time-sorted blocks:
+two binary searches narrow each block before applying the value predicate.
+Ranges are sorted by row offset before copy/callback output, preserving the
+previous file order. Queries covering an entire file segment keep the original
+vectorized scan.
+
+Method: an external copy of the same `part-b` source retained the previous
+segment scan; the working build used the block index. Both used the single-pass
+tokenizer, 2024 data, Release mode, and 20 in-process repeats (minimum shown).
+All counts and copy/callback checksums matched.
+
+| Layout | Window | Count old → indexed | Copy old → indexed | Callback old → indexed |
+|---|---|---:|---:|---:|
+| rows | 1 hour (1,205 rows) | 12.852 → 0.336 ms (38.2×) | 11.668 → 0.298 ms (39.2×) | 12.540 → 0.291 ms (43.2×) |
+| rows | 5 days (140,298 rows) | 12.977 → 0.605 ms (21.4×) | 12.080 → 1.026 ms (11.8×) | 12.801 → 0.853 ms (15.0×) |
+| columns | 1 hour (1,205 rows) | 9.522 → 0.241 ms (39.6×) | 9.847 → 0.301 ms (32.7×) | 11.467 → 0.296 ms (38.8×) |
+| columns | 5 days (140,298 rows) | 9.495 → 0.414 ms (23.0×) | 10.820 → 1.337 ms (8.1×) | 11.972 → 1.046 ms (11.4×) |
+
+The first full-year control looked noisy, so it was repeated as five interleaved
+processes with 100 query repetitions each. Mean minimum time was unchanged
+within normal variation: rows 9.673 → 9.589 ms and columns 1.573 → 1.552 ms.
+Thus narrow ranges gain 8–43× without slowing the whole-segment path.
+
+Correctness: synthetic Q2 tests cover value-filtered and time-only indexed
+ranges in both layouts; the 2024 layout-equivalence test, all normal tests, the
+65,742,181-row full regression, and the ASan/UBSan synthetic query test passed.
+Raw benchmark CSVs are in `~/cmpe275-results/` on W-1.
+
 ## Open items
 
-- Phase 2 Step 2 (library, column layout, static vs shared) is done and measured on M-A. Remaining: OpenMP in `part-b/omp` (W), then integrating W's single-pass tokenizer, time-only search and OpenMP into `part-b/lib`, and re-measuring. Add entries here as results arrive, including failures.
+- Phase 2 Step 2, the single-pass tokenizer, and indexed constrained-time Q2 are done. Remaining: OpenMP in `part-b/omp` (W), then integrating OpenMP into `part-b/lib` and re-measuring on M-A. Add entries here as results arrive, including failures.
 - Individual contributions and the AI-assisted Phase 1 code decision: undecided; needed for the report.

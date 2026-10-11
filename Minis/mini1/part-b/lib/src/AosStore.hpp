@@ -53,9 +53,14 @@ private:
         HourIndex minHour;
         HourIndex maxHour;
     };
+    struct RowRange {
+        std::uint32_t begin;
+        std::uint32_t end;
+    };
 
     template <typename OnMatch>
     void scanValues(const ValueQuery& query, OnMatch&& onMatch) const;
+    void indexedRanges(const Segment& segment, HourRange range, std::vector<RowRange>& out) const;
 
     template <GroupBy G>
     void aggregateInto(const AggregateQuery& query, std::vector<Stats>& groups) const;

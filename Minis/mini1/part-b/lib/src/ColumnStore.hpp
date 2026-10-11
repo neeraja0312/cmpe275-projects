@@ -59,6 +59,10 @@ private:
         HourIndex minHour;
         HourIndex maxHour;
     };
+    struct RowRange {
+        std::uint32_t begin;
+        std::uint32_t end;
+    };
 
     Measurement rowAt(std::size_t i) const {
         return Measurement{hours_[i], monitors_[i], values_[i], qualifiers_[i], methods_[i]};
@@ -67,6 +71,7 @@ private:
     // Calls onMatch(index) for every row whose value (and time) match.
     template <typename OnMatch>
     void scanValues(const ValueQuery& query, OnMatch&& onMatch) const;
+    void indexedRanges(const Segment& segment, HourRange range, std::vector<RowRange>& out) const;
 
     template <GroupBy G>
     void aggregateInto(const AggregateQuery& query, std::vector<Stats>& groups) const;

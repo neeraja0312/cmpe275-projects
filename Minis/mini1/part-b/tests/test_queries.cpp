@@ -224,6 +224,34 @@ void checkDatabase(const Database& db, const LoadReport& report, const Fixture& 
         CHECK_EQ(sink.all.size(), expected);
     }
 
+    // Q2 time-only fast path: full value range over a narrow hour. It must
+    // return the same rows in original file order, not monitor-index order.
+    ValueQuery timeOnly;
+    timeOnly.pollutant = Pollutant::Ozone;
+    timeOnly.range = {static_cast<HourIndex>(hoursSinceEpoch(2021, 12, 31, 8)),
+                      static_cast<HourIndex>(hoursSinceEpoch(2021, 12, 31, 11))};
+    std::vector<const Expected*> expectedTimeRows;
+    for (const Expected& e : fx.rows) {
+        if (kMonitors[e.monitor].pollutant == Pollutant::Ozone &&
+            timeOnly.range.contains(static_cast<HourIndex>(e.hour))) {
+            expectedTimeRows.push_back(&e);
+        }
+    }
+    CHECK_EQ(db.countByValue(timeOnly), expectedTimeRows.size());
+    const auto timeRows = db.selectByValue(timeOnly);
+    CHECK_EQ(timeRows.size(), expectedTimeRows.size());
+    for (std::size_t i = 0; i < timeRows.size() && i < expectedTimeRows.size(); ++i) {
+        CHECK_EQ(timeRows[i].hour, static_cast<HourIndex>(expectedTimeRows[i]->hour));
+        CHECK_EQ(timeRows[i].value, static_cast<ScaledValue>(expectedTimeRows[i]->value));
+    }
+    CollectSink timeSink;
+    db.forEachByValue(timeOnly, timeSink);
+    CHECK_EQ(timeSink.all.size(), timeRows.size());
+    for (std::size_t i = 0; i < timeRows.size() && i < timeSink.all.size(); ++i) {
+        CHECK_EQ(timeSink.all[i].hour, timeRows[i].hour);
+        CHECK_EQ(timeSink.all[i].value, timeRows[i].value);
+    }
+
     // Q3: every grouping against brute force, ozone in 2021 only.
     AggregateQuery agg;
     agg.pollutant = Pollutant::Ozone;

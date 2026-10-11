@@ -111,23 +111,43 @@ std::size_t AosStore::rangeByMonitorScan(MonitorId monitor, HourRange range) con
 
 // ---- Q2 --------------------------------------------------------------------
 
+void AosStore::indexedRanges(const Segment& segment, HourRange range, std::vector<RowRange>& out) const {
+    out.clear();
+    for (const auto& monitorBlocks : blocks_) {
+        for (const Block& block : monitorBlocks) {
+            if (block.begin < segment.begin || block.begin >= segment.end) continue;
+            if (!range.overlaps(block.first, block.last)) continue;
+            const Measurement* first = rows_.data() + block.begin;
+            const auto [lo, hi] = narrow(first, first + block.count, range);
+            if (lo == hi) continue;
+            out.push_back({static_cast<std::uint32_t>(lo - rows_.data()),
+                           static_cast<std::uint32_t>(hi - rows_.data())});
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const RowRange& a, const RowRange& b) { return a.begin < b.begin; });
+}
+
 template <typename OnMatch>
 void AosStore::scanValues(const ValueQuery& query, OnMatch&& onMatch) const {
     const ScaledValue lo = query.lo;
     const ScaledValue hi = query.hi;
+    std::vector<RowRange> ranges;
     for (const Segment& segment : segments_) {
         if (segment.pollutant != query.pollutant) continue;
         if (!query.range.overlaps(segment.minHour, segment.maxHour)) continue;
 
-        const Measurement* it = rows_.data() + segment.begin;
-        const Measurement* end = rows_.data() + segment.end;
         if (query.range.covers(segment.minHour, segment.maxHour)) {
+            const Measurement* it = rows_.data() + segment.begin;
+            const Measurement* end = rows_.data() + segment.end;
             for (; it != end; ++it) {
                 if (it->value >= lo && it->value <= hi) onMatch(*it);
             }
         } else {
-            for (; it != end; ++it) {
-                if (it->value >= lo && it->value <= hi && query.range.contains(it->hour)) onMatch(*it);
+            indexedRanges(segment, query.range, ranges);
+            for (const RowRange& range : ranges) {
+                for (std::uint32_t i = range.begin; i < range.end; ++i) {
+                    if (rows_[i].value >= lo && rows_[i].value <= hi) onMatch(rows_[i]);
+                }
             }
         }
     }
@@ -136,13 +156,14 @@ void AosStore::scanValues(const ValueQuery& query, OnMatch&& onMatch) const {
 std::size_t AosStore::countByValue(const ValueQuery& query) const {
     // Same single-unsigned-compare, 32-bit-counter loop as ColumnStore, so a
     // comparison between the layouts measures memory layout and not loop style.
-    // Segments that only partly overlap the time range use the general scan.
+    // Segments that partly overlap the time range use per-monitor binary search.
     if (query.lo > query.hi) return 0;
     const auto base = static_cast<std::uint16_t>(query.lo);
     const auto span = static_cast<std::uint16_t>(static_cast<std::uint16_t>(query.hi) - base);
     constexpr std::size_t kBlock = std::size_t{1} << 16;
 
     std::size_t count = 0;
+    std::vector<RowRange> ranges;
     for (const Segment& segment : segments_) {
         if (segment.pollutant != query.pollutant) continue;
         if (!query.range.overlaps(segment.minHour, segment.maxHour)) continue;
@@ -159,8 +180,13 @@ std::size_t AosStore::countByValue(const ValueQuery& query) const {
                 count += local;
             }
         } else {
-            for (; it != end; ++it) {
-                if (it->value >= query.lo && it->value <= query.hi && query.range.contains(it->hour)) ++count;
+            indexedRanges(segment, query.range, ranges);
+            for (const RowRange& range : ranges) {
+                std::uint32_t local = 0;
+                for (std::uint32_t i = range.begin; i < range.end; ++i) {
+                    local += static_cast<std::uint16_t>(static_cast<std::uint16_t>(rows_[i].value) - base) <= span;
+                }
+                count += local;
             }
         }
     }
