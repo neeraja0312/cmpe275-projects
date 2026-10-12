@@ -27,6 +27,20 @@ tar -czf "$out" \
   --exclude='.venv' \
   --exclude='.DS_Store' \
   --exclude='.gitkeep' \
+  --exclude='report.md' \
+  --exclude='slide_speaker_script.md' \
+  --exclude='notes.md' \
+  --exclude='results' \
+  --exclude='make_slide.py' \
+  --exclude='make_report_docx.py' \
+  --exclude='plot*.py' \
+  --exclude='figures' \
+  --exclude='*.png' \
+  --exclude='*.jpg' \
+  --exclude='*.jpeg' \
+  --exclude='*.gif' \
+  --exclude='*.svg' \
+  --exclude='*.webp' \
   mini1
 
 echo "wrote $out"
