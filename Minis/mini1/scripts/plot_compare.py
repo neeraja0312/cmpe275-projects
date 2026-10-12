@@ -16,6 +16,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 R = Path(__file__).resolve().parent.parent / "results"
+plt.rcParams.update({"font.size": 12, "axes.titlesize": 13})
 COLORS = {"Phase 1": "#7f7f7f", "part-b rows": "#1f77b4", "part-b columns": "#d62728"}
 
 
@@ -51,9 +52,9 @@ def grouped(ax, groups, series, scale, unit, log=False):
                 ys.append(data[key] * scale)
         bars = ax.bar(xs, ys, width, label=lab, color=color)
         for b, y in zip(bars, ys):
-            ax.annotate(f"{y:.3g}", (b.get_x() + b.get_width() / 2, y), ha="center", va="bottom", fontsize=7)
+            ax.annotate(f"{y:.3g}", (b.get_x() + b.get_width() / 2, y), ha="center", va="bottom", fontsize=8.5)
     ax.set_xticks(range(len(groups)))
-    ax.set_xticklabels([g[1] for g in groups], fontsize=8)
+    ax.set_xticklabels([g[1] for g in groups], fontsize=10)
     ax.set_ylabel(unit)
     if log:
         ax.set_yscale("log")
@@ -68,24 +69,24 @@ def load_graphs():
     if any(r["name"] == "omp8" for r in rows):
         names += [("omp1", "OpenMP 1 thr"), ("omp4", "OpenMP 4 thr"), ("omp8", "OpenMP 8 thr")]
         COLORS.update({"OpenMP 1 thr": "#aec7e8", "OpenMP 4 thr": "#98df8a", "OpenMP 8 thr": "#2ca02c"})
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(13, 4.8))
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.8))
     data = [[float(r["load_s"]) for r in rows if r["name"] == k] for k, _ in names]
     box = a1.boxplot(data, tick_labels=[v.replace(" ", "\n", 1) for _, v in names], patch_artist=True, showmeans=True)
     for patch, (_, v) in zip(box["boxes"], names):
         patch.set_facecolor(COLORS[v])
         patch.set_alpha(0.6)
     for i, d in enumerate(data):
-        a1.annotate(f"median {statistics.median(d):.2f}", (i + 1, min(d)), ha="center", va="top", fontsize=8)
+        a1.annotate(f"{statistics.median(d):.1f}", (i + 1, max(d)), ha="center", va="bottom", fontsize=10, xytext=(0, 4), textcoords="offset points")
     a1.set_ylabel("load time, seconds")
-    a1.set_title("Full-dataset load, interleaved runs (AC power)")
+    a1.set_title("Load time: median (number), mean (triangle)")
     a1.grid(axis="y", alpha=0.3)
 
     mem = [statistics.median(float(r["footprint_bytes"]) for r in rows if r["name"] == k) / 2**20 for k, _ in names]
     bars = a2.bar([v.replace(" ", "\n", 1) for _, v in names], mem, color=[COLORS[v] for _, v in names])
     for b, y in zip(bars, mem):
-        a2.annotate(f"{y:.0f} MiB", (b.get_x() + b.get_width() / 2, y), ha="center", va="bottom", fontsize=9)
+        a2.annotate(f"{y:.0f}", (b.get_x() + b.get_width() / 2, y), ha="center", va="bottom", fontsize=10)
     a2.set_ylabel("peak footprint, MiB")
-    a2.set_title("Memory after loading 65.7M rows")
+    a2.set_title("Peak memory footprint (MiB)")
     a2.grid(axis="y", alpha=0.3)
     save(fig, "compare_load.png")
 
@@ -123,14 +124,17 @@ def query_graphs():
     # Q2 non-count modes
     groups = [("q2-no2-gt100ppb", "NO2>100ppb\n38 rows"), ("q2-ozone-gt0.070", "ozone>0.070\n281k"),
               ("q2-ozone-gt0.030", "ozone>0.030\n25.3M"), ("q2-ozone-onehour", "one hour\n1,205")]
-    fig, axes = plt.subplots(1, 3, figsize=(14, 4.4))
-    for ax, mode in zip(axes, ["copy", "callback", "virtual"]):
+    fig, axes2 = plt.subplots(2, 2, figsize=(11, 8.2))
+    axes = axes2.ravel()
+    for ax, mode in zip(axes[:3], ["copy", "callback", "virtual"]):
         grouped(ax, groups, [("Phase 1", COLORS["Phase 1"], by(p1, mode)),
                              ("part-b rows", COLORS["part-b rows"], by(ao, mode)),
                              ("part-b columns", COLORS["part-b columns"], by(co, mode))], 1e3, "milliseconds", log=True)
         ax.set_title(f"Q2 {mode}")
-    axes[0].legend(fontsize=8)
-    fig.suptitle("Q2: value range, result modes that return rows (min of 10 repeats, log scale)")
+    handles, labels = axes[0].get_legend_handles_labels()
+    axes[3].axis("off")
+    axes[3].legend(handles, labels, loc="center", fontsize=13, title="build", title_fontsize=13)
+    fig.suptitle("Q2 result modes that return rows (min of 10 repeats, log scale)", fontsize=14)
     save(fig, "compare_q2.png")
 
     # Q2 count: before/after the count-loop fix
@@ -163,12 +167,13 @@ def query_graphs():
     # Static vs shared: ratio shared/static for every query row, both layouts
     if sh_a and sh_c:
         fig, ax = plt.subplots(figsize=(7, 4.2))
-        for lab, st, sh, color in [("rows", ao, sh_a, COLORS["part-b rows"]), ("columns", co, sh_c, COLORS["part-b columns"])]:
-            ratios = sorted(sh[k] / st[k] for k in st if k in sh)
+        # static and shared were measured in the same (first Step 2) run on the same code
+        for lab, st, sh, color in [("rows", old_a, sh_a, COLORS["part-b rows"]), ("columns", old_c, sh_c, COLORS["part-b columns"])]:
+            ratios = sorted(sh[k] / st[k] for k in st if k in sh and st[k] >= 1e-3)  # ms-scale only: timer tick is ~40 ns
             ax.plot(range(len(ratios)), ratios, "o-", label=f"{lab} (median {statistics.median(ratios):.3f})", color=color)
         ax.axhline(1.0, color="k", lw=0.8)
         ax.set_ylabel("shared / static time")
-        ax.set_xlabel("search configurations, sorted")
+        ax.set_xlabel("searches taking at least 1 ms, sorted")
         ax.set_title("Static vs shared library: ratio per search (1.0 = identical)")
         ax.legend()
         ax.grid(alpha=0.3)
@@ -180,7 +185,7 @@ def omp_graph():
     if not rows:
         return
     threads = sorted({int(r["threads"]) for r in rows})
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.5))
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.6))
     for q, lab in [("q2-count", "Q2 count"), ("q2-copy", "Q2 copy"), ("q3-none", "Q3 aggregate")]:
         t = {int(r["threads"]): float(r["query_s_min"]) for r in rows if r["query"] == q}
         a1.plot(threads, [t[x] * 1e3 for x in threads], "o-", label=lab)
@@ -189,12 +194,12 @@ def omp_graph():
     a1.set_ylabel("milliseconds")
     a1.set_title("OpenMP searches, ozone data (min of 10)")
     a2.set_ylabel("speedup vs 1 thread")
-    a2.set_title("Speedup (M-A: 4 performance + 6 efficiency cores)")
+    a2.set_title("Speedup over 1 thread")
     for a in (a1, a2):
         a.set_xlabel("threads")
         a.set_xticks(threads)
         a.grid(alpha=0.3)
-        a.legend(fontsize=8)
+        a.legend(fontsize=10)
     save(fig, "compare_omp_queries.png")
     loads = read("final-loads.csv")
     if loads and any(r["name"] == "omp8" for r in loads):

@@ -85,7 +85,7 @@ that ran everything is `results/run_baselines.sh` (git-ignored).
 | buffered | off | 22.91 | 0.14 | 22.69 | 23.12 | 1,606 MB |
 | getline | on | 23.90 | 0.15 | 23.73 | 24.15 | 792 MB |
 | getline | off | 24.12 | 0.11 | 24.00 | 24.35 | 1,598 MB |
-| naive | on | 45.49 | 4.17 | 43.36 | 54.26 | 792 MB |
+| naive | on | 45.49 | 4.17 | 43.36 | 54.26 | 793 MB |
 | naive | off | 43.48 | 0.22 | 43.27 | 44.02 | 1,598 MB |
 
 Observations:
@@ -112,7 +112,7 @@ Q2:
 | NO₂ > 100 ppb | 4.49 ms | 4.67 ms | 4.69 ms | 13.07 ms | 38 | 0.0002% |
 | ozone > 0.070 ppm | 11.36 ms | 13.03 ms | 13.09 ms | 33.87 ms | 281,349 | 0.60% |
 | ozone > 0.030 ppm | 11.34 ms | 57.83 ms | 62.62 ms | 62.79 ms | 25,272,790 | 53.8% |
-| ozone, one hour of 2024 (time-only) | 3.80 ms | 3.81 ms | 3.80 ms | 34.27 ms | 1,205 | 0.013% |
+| ozone, one hour of 2024 (time-only) | 3.80 ms | 3.80 ms | 3.80 ms | 34.27 ms | 1,205 | 0.013% |
 
 Q3 (ozone, 2024, 8,995,978 rows): none 4.18 ms, by hour of day 5.04 ms, by monitor 25.14 ms.
 
@@ -190,6 +190,11 @@ per field), roughly 600M short calls for 2024. This is the evidence for the
 single-pass tokenizer in Phase 2. Caveat: the sample covers about 3 s of a
 4.4 s load, not the start-up.
 
+
+**Re-check at the end of the project (2026-10-11).** A second 3 s `sample` of a 2024 load (2,501 samples, 4.7 s load): splitting (`memchr`, `CsvTokenizer::split`, memchr stub) 1,937 = 77.4%; number and date parsing 298 = 11.9% (grouping by function name, so slightly coarser than the first); file read 196 = 7.8%; `RowBuilder::process` 54 = 2.2%; dictionary 26 = 1.0%; store append 32 = 1.3%. Same conclusion; splitting is about 78%, other shares move by a few points. Memory re-check: four fresh full loads gave `peak_rss_bytes` of 142.2, 149.3, 88.3 and 126.6 MB against `peak_footprint_bytes` 800.8 to 800.9 MB (the original three runs gave 79.6, 87.5, 115.6 MB). The stored ten-run benchmark logs show in-process RSS 95.0 MB in run 1 and 800.9 MB in runs 2 to 10, and `/usr/bin/time` max RSS 95.5 MB then 800.9 MB; for `getline` it ranged 611.6 to 792.6 MB over its ten runs. RSS is erratic in every form we measured; footprint was not.
+
+String-rows re-check: 8,995,978 rows, 9.42 s (first measurement 9.59 s), 624 bytes per row, extrapolated 41.0 GB, compact estimate 789 MB; in-process `peak_rss_bytes` 3.07 GB (first measurement 4.32 GB); `/usr/bin/time -l` maximum resident set size 5.62 GB (same as before) and peak memory footprint 10.08 GB.
+
 ## 2026-10-08: graphs
 
 Created a virtual environment (`python3 -m venv .venv && .venv/bin/pip install matplotlib`,
@@ -256,7 +261,7 @@ Searches (min of 10 repeats), ratio = columns / aos in part-b (below 1.00 = colu
 Static vs shared library (ratio shared/static over all ms-scale queries): aos median 1.001 (0.984 to 1.025), columns median 0.993 (0.882 to 1.060). No measurable difference: the library is entered once per query, so symbol resolution is not on the hot path.
 
 Findings so far:
-1. The library boundary costs nothing measurable: part-b `aos` equals Phase 1 on every search (within about 1 to 2%).
+1. The library boundary costs nothing measurable: part-b `aos` equals Phase 1 on every search of 1 ms or more to within 2.2%, except the ungrouped Q3 aggregate, which was 9% faster (3.80 vs 4.18 ms).
 2. Column layout helps only queries that touch few fields (`count` 1.35×, Q1 `scan` 2.5×) and hurts everything that must return whole rows (`copy` up to 1.25×, `callback`/`virtual` up to 2×, Q1 `copy` 9×), because rows are rebuilt from five arrays. "Do queries shape your design?" Yes: the right layout depends on what the query returns.
 3. The column `count` gain was first smaller than the byte ratio suggests (2 vs 12 bytes per row): 94 MB in 8.3 ms is ~11 GB/s, far below what the `aos` scan reaches (564 MB in 11.3 ms ≈ 50 GB/s), so the loop was compute-bound. Fixed, see the next section.
 4. The time-only search does not benefit from either layout (3.75 ms in both); it needs the per-monitor binary search (W's task).
@@ -456,7 +461,7 @@ Raw data: `results/verify-regression.csv`, `verify-omp-loads-all.csv`, `verify-o
 
 **Corrections.**
 1. The Step 2 finding "callback and virtual about 2x slower on columns" came from the first Step 2 run (began on battery; its columns callback of 126 ms was an outlier). The final mains-power run gives columns/rows: copy 1.18, callback 1.13, virtual 1.25 to 1.76, Q1 copy 11.2. The report uses the final run (Table 5).
-2. "Part-b is 20 to 40% slower than Phase 1 on row-returning searches" in the final run is not reproducible. Phase 1 vs pre-merge part-b (commit 88caa24, built in a temp directory) vs current part-b, rows layout, ozone only, `--repeat 20`, 4 interleaved rounds, medians in ms: copy 0.031: 58.70 / 58.49 / 59.62; virtual 0.071: 34.15 / 34.12 / 34.20; Q3 ungrouped: 3.92 / 3.95 / 3.83 (no regression). Batched callback 0.031: 63.01 / 58.21 / 65.87, a consistent +13% against the pre-merge build and +5% against Phase 1 (cause not investigated; the covered-segment path was restructured by the indexed-search change). The high times in the final run are unexplained; that run loaded both pollutants, the check loaded ozone only.
+2. "Part-b is slower than Phase 1 on row-returning searches" in the final run (rows layout 16% to 73% slower, median 28%, excluding the one-hour searches) is not reproducible. Phase 1 vs pre-merge part-b (commit 88caa24, built in a temp directory) vs current part-b, rows layout, ozone only, `--repeat 20`, 4 interleaved rounds, medians in ms: copy 0.031: 58.70 / 58.49 / 59.62; virtual 0.071: 34.15 / 34.12 / 34.20; Q3 ungrouped: 3.92 / 3.95 / 3.83 (no regression). Batched callback 0.031: 63.01 / 58.21 / 65.87, a consistent +13% against the pre-merge build and +5% against Phase 1 (cause not investigated; the covered-segment path was restructured by the indexed-search change). The high times in the final run are unexplained; that run loaded both pollutants, the check loaded ozone only.
 3. The second-session OpenMP load table (all six thread counts, one interleaved session, 10 rounds, battery): medians 23.88 / 13.70 / 8.18 / 7.78 / 6.61 / 6.11 s at 1/2/4/6/8/10 threads (speedup 1.00 / 1.74 / 2.92 / 3.07 / 3.61 / 3.91, efficiency 100 / 87 / 73 / 51 / 45 / 39%); footprint 1,643 / 1,753 / 1,874 / 2,095 / 2,113 / 2,130 MiB. The earlier mains-power session gave 24.06 / 8.70 / 6.94 s at 1/4/8 threads, within 6%.
 4. Confirmed in code: the OpenMP `AosStore::countByValue` in `part-b/omp` still uses the original branchy per-row loop on the row layout, so comparing it with the library's column count mixes layout and loop effects.
 5. Medians and MiB figures quoted from graphs match `results/final-loads.csv` exactly.
